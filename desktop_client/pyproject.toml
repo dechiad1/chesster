@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "desktop-client"
+version = "0.1.0"
+description = "Chess platform desktop client (PyQt6)"
+authors = ["Chess App Team"]
+packages = [{include = "desktop_client"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+PyQt6 = "^6.6.0"
+python-chess = "^1.999"
+httpx = "^0.25.2"
+pydantic = "^2.5.0"
+shared = {path = "../shared", develop = true}
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-qt = "^4.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "shared"
+version = "0.1.0"
+description = "Shared models and utilities for chess platform"
+authors = ["Chess App Team"]
+packages = [{include = "shared"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pydantic = "^2.5.0"
+python-chess = "^1.999"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
