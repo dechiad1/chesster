@@ -2,16 +2,20 @@
 
 import sys
 import logging
+import json
+from pathlib import Path
 from typing import Optional
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                            QHBoxLayout, QPushButton, QLabel, QFileDialog, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                            QHBoxLayout, QPushButton, QLabel, QFileDialog,
                             QListWidget, QTextEdit, QSplitter, QMessageBox,
-                            QStatusBar, QListWidgetItem)
-from PyQt6.QtCore import Qt, QRect, QTimer
+                            QStatusBar, QListWidgetItem, QLineEdit, QDialog,
+                            QFormLayout, QDialogButtonBox, QGroupBox, QProgressDialog,
+                            QTabWidget)
+from PyQt6.QtCore import Qt, QRect, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QIcon, QShortcut, QKeySequence
 
 from shared.chess_service import ChessGameService, PGNService, OpeningBook
-from desktop_client.services.api_client import ChessAPIClient, APIError, GameData
+from desktop_client.services.api_client import ChessAPIClient, APIError, GameData, GameTrendAnalysis
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -197,21 +201,143 @@ class ChessBoard(QWidget):
         self.update()
 
 
+class SettingsDialog(QDialog):
+    """Dialog for configuring application settings."""
+
+    def __init__(self, parent=None, current_api_key: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(400)
+
+        layout = QVBoxLayout(self)
+
+        # LLM API Key section
+        api_group = QGroupBox("LLM Analysis Configuration")
+        api_layout = QFormLayout(api_group)
+
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_input.setText(current_api_key)
+        self.api_key_input.setPlaceholderText("Enter your Anthropic API key")
+        api_layout.addRow("Anthropic API Key:", self.api_key_input)
+
+        # Show/hide toggle
+        self.show_key_btn = QPushButton("Show")
+        self.show_key_btn.setCheckable(True)
+        self.show_key_btn.clicked.connect(self.toggle_key_visibility)
+        api_layout.addRow("", self.show_key_btn)
+
+        layout.addWidget(api_group)
+
+        # Info label
+        info_label = QLabel(
+            "The API key is used to analyze your chess games using Claude AI.\n"
+            "Get your API key from: https://console.anthropic.com/"
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(info_label)
+
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def toggle_key_visibility(self):
+        """Toggle API key visibility."""
+        if self.show_key_btn.isChecked():
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.show_key_btn.setText("Hide")
+        else:
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.show_key_btn.setText("Show")
+
+    def get_api_key(self) -> str:
+        """Get the entered API key."""
+        return self.api_key_input.text().strip()
+
+
+class AnalysisWorker(QThread):
+    """Worker thread for running game analysis."""
+
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, api_client: ChessAPIClient, username: str, api_key: str, count: int = 15):
+        super().__init__()
+        self.api_client = api_client
+        self.username = username
+        self.api_key = api_key
+        self.count = count
+
+    def run(self):
+        """Run the analysis in a background thread."""
+        try:
+            result = self.api_client.analyze_chesscom_games(
+                self.username, self.api_key, self.count
+            )
+            if result.get("success") and result.get("analysis"):
+                analysis = GameTrendAnalysis(**result["analysis"])
+                self.finished.emit(analysis)
+            else:
+                error_msg = result.get("error", "Analysis failed for unknown reason")
+                self.error.emit(error_msg)
+        except APIError as e:
+            self.error.emit(str(e))
+        except Exception as e:
+            self.error.emit(f"Unexpected error: {e}")
+
+
 class ChessApp(QMainWindow):
     """Main chess application with API integration."""
-    
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Chess Analysis Tool - API Version")
         self.api_client = ChessAPIClient()
         self.opening_book = OpeningBook()
-        
+
         # Status tracking
         self.api_connected = False
         self.current_user_id = None
-        
+
+        # Settings
+        self.settings_file = Path.home() / ".chesster_settings.json"
+        self.llm_api_key = ""
+        self.chesscom_username = ""
+        self.load_settings()
+
+        # Analysis worker
+        self.analysis_worker = None
+
         self.setup_ui()
         self.check_api_connection()
+
+    def load_settings(self):
+        """Load settings from file."""
+        try:
+            if self.settings_file.exists():
+                with open(self.settings_file, 'r') as f:
+                    settings = json.load(f)
+                    self.llm_api_key = settings.get("llm_api_key", "")
+                    self.chesscom_username = settings.get("chesscom_username", "")
+        except Exception as e:
+            logger.warning(f"Failed to load settings: {e}")
+
+    def save_settings(self):
+        """Save settings to file."""
+        try:
+            settings = {
+                "llm_api_key": self.llm_api_key,
+                "chesscom_username": self.chesscom_username
+            }
+            with open(self.settings_file, 'w') as f:
+                json.dump(settings, f)
+        except Exception as e:
+            logger.warning(f"Failed to save settings: {e}")
     
     def setup_ui(self):
         """Set up the user interface."""
@@ -277,23 +403,58 @@ class ChessApp(QMainWindow):
         
         right_panel.addWidget(top_widget)
         
-        # Bottom part - Openings and analysis
+        # Bottom part - Tabs for Openings and Chess.com Analysis
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
-        
-        # Openings
-        bottom_layout.addWidget(QLabel("Opening Book:"))
+
+        # Create tab widget
+        self.bottom_tabs = QTabWidget()
+
+        # Tab 1: Opening Book
+        openings_tab = QWidget()
+        openings_layout = QVBoxLayout(openings_tab)
         self.openings_list = QListWidget()
         self.openings_list.addItems(self.opening_book.get_all_openings().keys())
         self.openings_list.itemClicked.connect(self.load_opening)
-        bottom_layout.addWidget(self.openings_list)
-        
-        # Analysis
-        bottom_layout.addWidget(QLabel("Analysis:"))
+        openings_layout.addWidget(self.openings_list)
+        self.bottom_tabs.addTab(openings_tab, "Opening Book")
+
+        # Tab 2: Chess.com Analysis
+        chesscom_tab = QWidget()
+        chesscom_layout = QVBoxLayout(chesscom_tab)
+
+        # Username input
+        username_layout = QHBoxLayout()
+        username_layout.addWidget(QLabel("Chess.com Username:"))
+        self.chesscom_username_input = QLineEdit()
+        self.chesscom_username_input.setText(self.chesscom_username)
+        self.chesscom_username_input.setPlaceholderText("Enter username")
+        self.chesscom_username_input.returnPressed.connect(self.run_analysis)
+        username_layout.addWidget(self.chesscom_username_input)
+        chesscom_layout.addLayout(username_layout)
+
+        # Analysis buttons
+        analysis_buttons = QHBoxLayout()
+        self.fetch_games_btn = QPushButton("Fetch Games")
+        self.fetch_games_btn.clicked.connect(self.fetch_chesscom_games)
+        self.analyze_btn = QPushButton("Analyze Trends (15 games)")
+        self.analyze_btn.clicked.connect(self.run_analysis)
+        self.settings_btn = QPushButton("Settings")
+        self.settings_btn.clicked.connect(self.open_settings)
+        analysis_buttons.addWidget(self.fetch_games_btn)
+        analysis_buttons.addWidget(self.analyze_btn)
+        analysis_buttons.addWidget(self.settings_btn)
+        chesscom_layout.addLayout(analysis_buttons)
+
+        # Analysis results display
+        chesscom_layout.addWidget(QLabel("Analysis Results:"))
         self.analysis_text = QTextEdit()
         self.analysis_text.setReadOnly(True)
-        bottom_layout.addWidget(self.analysis_text)
-        
+        chesscom_layout.addWidget(self.analysis_text)
+
+        self.bottom_tabs.addTab(chesscom_tab, "Chess.com Analysis")
+
+        bottom_layout.addWidget(self.bottom_tabs)
         right_panel.addWidget(bottom_widget)
         layout.addWidget(right_panel)
         
@@ -511,7 +672,157 @@ class ChessApp(QMainWindow):
         """Handle move selection from the list."""
         move_index = self.move_list.row(item) * 2
         self.board_widget.goto_move(move_index)
-    
+
+    def open_settings(self):
+        """Open the settings dialog."""
+        dialog = SettingsDialog(self, self.llm_api_key)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.llm_api_key = dialog.get_api_key()
+            self.save_settings()
+            QMessageBox.information(self, "Settings", "Settings saved successfully!")
+
+    def fetch_chesscom_games(self):
+        """Fetch games from Chess.com for the entered username."""
+        username = self.chesscom_username_input.text().strip()
+        if not username:
+            QMessageBox.warning(self, "Input Required", "Please enter a Chess.com username.")
+            return
+
+        if not self.api_connected:
+            QMessageBox.warning(
+                self, "API Not Connected",
+                "The API server is not connected. Please start the server first."
+            )
+            return
+
+        # Save the username
+        self.chesscom_username = username
+        self.save_settings()
+
+        # Show progress
+        self.analysis_text.setText(f"Fetching games for '{username}'...")
+        self.fetch_games_btn.setEnabled(False)
+
+        try:
+            games = self.api_client.fetch_chesscom_games(username, count=15)
+
+            if not games:
+                self.analysis_text.setText(f"No games found for '{username}'.")
+            else:
+                # Display games summary
+                text = f"Found {len(games)} recent games for {username}:\n\n"
+                for i, game in enumerate(games, 1):
+                    from datetime import datetime
+                    game_date = datetime.fromtimestamp(game.end_time).strftime("%Y-%m-%d %H:%M")
+                    is_white = game.white_username.lower() == username.lower()
+                    color = "White" if is_white else "Black"
+                    result = game.white_result if is_white else game.black_result
+                    opponent = game.black_username if is_white else game.white_username
+                    opponent_rating = game.black_rating if is_white else game.white_rating
+
+                    text += f"{i}. {game_date} - {color} vs {opponent} ({opponent_rating})\n"
+                    text += f"   Result: {result} | {game.time_class} | Opening: {game.opening or 'Unknown'}\n\n"
+
+                self.analysis_text.setText(text)
+
+        except APIError as e:
+            self.analysis_text.setText(f"Error fetching games: {e}")
+        except Exception as e:
+            self.analysis_text.setText(f"Unexpected error: {e}")
+        finally:
+            self.fetch_games_btn.setEnabled(True)
+
+    def run_analysis(self):
+        """Run LLM analysis on chess.com games."""
+        username = self.chesscom_username_input.text().strip()
+        if not username:
+            QMessageBox.warning(self, "Input Required", "Please enter a Chess.com username.")
+            return
+
+        if not self.llm_api_key:
+            reply = QMessageBox.question(
+                self, "API Key Required",
+                "An Anthropic API key is required for analysis.\n\nWould you like to configure it now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.open_settings()
+            return
+
+        if not self.api_connected:
+            QMessageBox.warning(
+                self, "API Not Connected",
+                "The API server is not connected. Please start the server first."
+            )
+            return
+
+        # Save the username
+        self.chesscom_username = username
+        self.save_settings()
+
+        # Disable buttons during analysis
+        self.analyze_btn.setEnabled(False)
+        self.fetch_games_btn.setEnabled(False)
+        self.analysis_text.setText(
+            f"Analyzing last 15 games for '{username}'...\n\n"
+            "This may take a minute. The AI is reviewing your games and identifying patterns."
+        )
+
+        # Start analysis in background thread
+        self.analysis_worker = AnalysisWorker(
+            self.api_client, username, self.llm_api_key, count=15
+        )
+        self.analysis_worker.finished.connect(self.on_analysis_complete)
+        self.analysis_worker.error.connect(self.on_analysis_error)
+        self.analysis_worker.start()
+
+    def on_analysis_complete(self, analysis: GameTrendAnalysis):
+        """Handle completed analysis."""
+        self.analyze_btn.setEnabled(True)
+        self.fetch_games_btn.setEnabled(True)
+
+        # Format the analysis results
+        text = f"""
+=== Chess Game Trend Analysis ===
+Player: {analysis.username}
+Games Analyzed: {analysis.games_analyzed}
+Win Rate: {analysis.win_rate:.1f}%
+Analysis Date: {analysis.analysis_date[:10]}
+
+--- SUMMARY ---
+{analysis.summary}
+
+--- STRENGTHS ---
+"""
+        for strength in analysis.strengths:
+            text += f"  + {strength}\n"
+
+        text += "\n--- AREAS FOR IMPROVEMENT ---\n"
+        for weakness in analysis.weaknesses:
+            text += f"  - {weakness}\n"
+
+        text += f"""
+--- OPENING ANALYSIS ---
+{analysis.opening_trends}
+
+Most Played Openings: {', '.join(analysis.most_played_openings) if analysis.most_played_openings else 'N/A'}
+
+--- TIME MANAGEMENT ---
+{analysis.time_management}
+
+--- RECOMMENDATIONS ---
+"""
+        for i, rec in enumerate(analysis.recommendations, 1):
+            text += f"  {i}. {rec}\n"
+
+        self.analysis_text.setText(text)
+
+    def on_analysis_error(self, error_message: str):
+        """Handle analysis error."""
+        self.analyze_btn.setEnabled(True)
+        self.fetch_games_btn.setEnabled(True)
+        self.analysis_text.setText(f"Analysis Error:\n\n{error_message}")
+
     def closeEvent(self, event):
         """Handle application close."""
         if self.api_client:
