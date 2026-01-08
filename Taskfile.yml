@@ -1,0 +1,116 @@
+version: "3"
+
+vars:
+  CORE_API_DIR: "{{.ROOT_DIR}}/core_api"
+  DESKTOP_CLIENT_DIR: "{{.ROOT_DIR}}/desktop_client"
+  CLAUDE_DIR: "{{.ROOT_DIR}}/.claude"
+
+tasks:
+  default:
+    desc: List all available tasks
+    cmds:
+      - task --list
+
+  # Setup tasks
+  setup:
+    desc: Set up development environment for all artifacts
+    deps:
+      - setup:core_api
+      - setup:desktop_client
+
+  setup:core_api:
+    desc: Set up development environment for core_api
+    dir: "{{.CORE_API_DIR}}"
+    cmds:
+      - poetry install
+    sources:
+      - pyproject.toml
+      - poetry.lock
+    generates:
+      - .venv/**/*
+
+  setup:desktop_client:
+    desc: Set up development environment for desktop_client
+    dir: "{{.DESKTOP_CLIENT_DIR}}"
+    cmds:
+      - poetry install
+    sources:
+      - pyproject.toml
+      - poetry.lock
+    generates:
+      - .venv/**/*
+
+  # Run tasks
+  run:core_api:
+    desc: Run the core API server (http://localhost:8000)
+    dir: "{{.CORE_API_DIR}}"
+    cmds:
+      - poetry run python run.py
+
+  run:desktop_client:
+    desc: Run the desktop client application
+    dir: "{{.DESKTOP_CLIENT_DIR}}"
+    cmds:
+      - poetry run python run_app.py
+
+  run:desktop:
+    desc: Run both core API and desktop client together
+    vars:
+      API_URL: "http://localhost:8000/health"
+      TIMEOUT: 30
+    cmds:
+      - |
+        bash -c '
+          cleanup() {
+            echo "Shutting down..."
+            kill $API_PID 2>/dev/null
+            exit 0
+          }
+          trap cleanup INT TERM EXIT
+
+          cd "{{.CORE_API_DIR}}" && poetry run python run.py &
+          API_PID=$!
+
+          echo "Waiting for API to be ready..."
+          elapsed=0
+          while [ $elapsed -lt {{.TIMEOUT}} ]; do
+            if ! kill -0 $API_PID 2>/dev/null; then
+              echo "API process failed to start"
+              exit 1
+            fi
+            if curl -sf "{{.API_URL}}" > /dev/null 2>&1; then
+              echo "API is ready"
+              break
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+          done
+
+          if [ $elapsed -ge {{.TIMEOUT}} ]; then
+            echo "API failed to respond within {{.TIMEOUT}} seconds"
+            kill $API_PID 2>/dev/null
+            exit 1
+          fi
+
+          cd "{{.DESKTOP_CLIENT_DIR}}" && poetry run python run_app.py
+        '
+
+  # Claude configuration sync
+  claude:sync:
+    desc: Copy Claude agents and reference files into project .claude directory
+    cmds:
+      - mkdir -p "{{.CLAUDE_DIR}}/agents"
+      - mkdir -p "{{.CLAUDE_DIR}}/reference"
+      - |
+        if [ -d ~/.claude/agents ]; then
+          cp -r ~/.claude/agents/* "{{.CLAUDE_DIR}}/agents/" 2>/dev/null || echo "No agents to copy"
+        else
+          echo "~/.claude/agents directory not found"
+        fi
+      - |
+        if [ -d ~/.claude/reference ]; then
+          cp -r ~/.claude/reference/* "{{.CLAUDE_DIR}}/reference/" 2>/dev/null || echo "No reference files to copy"
+        else
+          echo "~/.claude/reference directory not found"
+        fi
+    silent: false

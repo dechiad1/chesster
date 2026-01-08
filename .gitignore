@@ -39,5 +39,6 @@ pnpm-debug.log*
 *.sw?
 *.task
 
-# Claude
-.claude/
+core_api/*db
+
+.claude/settings*
