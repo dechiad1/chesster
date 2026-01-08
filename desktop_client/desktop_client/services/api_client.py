@@ -40,6 +40,39 @@ class UserData(BaseModel):
     is_active: bool
 
 
+class ChessComGameData(BaseModel):
+    """Chess.com game data model."""
+    url: str
+    pgn: str
+    time_control: str
+    end_time: int
+    rated: bool
+    time_class: str
+    rules: str
+    white_username: str
+    white_rating: int
+    white_result: str
+    black_username: str
+    black_rating: int
+    black_result: str
+    opening: Optional[str] = None
+
+
+class GameTrendAnalysis(BaseModel):
+    """Game trend analysis results."""
+    username: str
+    games_analyzed: int
+    analysis_date: str
+    summary: str
+    strengths: List[str]
+    weaknesses: List[str]
+    opening_trends: str
+    time_management: str
+    recommendations: List[str]
+    win_rate: float
+    most_played_openings: List[str]
+
+
 class ChessAPIClient:
     """Client for Chess Platform API."""
     
@@ -183,7 +216,62 @@ class ChessAPIClient:
         response = self.client.get(f"{self.api_url}/users/{user_id}")
         result = self._handle_response(response)
         return UserData(**result)
-    
+
+    # Chess.com Integration
+    def fetch_chesscom_games(self, username: str, count: int = 15) -> List[ChessComGameData]:
+        """Fetch recent games from Chess.com for a player.
+
+        Args:
+            username: Chess.com username
+            count: Number of games to fetch (default 15)
+
+        Returns:
+            List of recent games from Chess.com
+        """
+        data = {"username": username, "count": count}
+        response = self.client.post(f"{self.api_url}/analysis/chesscom/games", json=data)
+        result = self._handle_response(response)
+        return [ChessComGameData(**game) for game in result.get("games", [])]
+
+    def analyze_chesscom_games(
+        self, username: str, api_key: str, count: int = 15
+    ) -> Dict[str, Any]:
+        """Analyze a player's Chess.com games using LLM.
+
+        Args:
+            username: Chess.com username
+            api_key: Anthropic API key for LLM analysis
+            count: Number of games to analyze (default 15)
+
+        Returns:
+            Dictionary with success status and analysis results
+        """
+        data = {"username": username, "api_key": api_key, "count": count}
+        response = self.client.post(
+            f"{self.api_url}/analysis/analyze",
+            json=data,
+            timeout=120.0  # Longer timeout for LLM analysis
+        )
+        return self._handle_response(response)
+
+    def get_game_analysis(
+        self, username: str, api_key: str, count: int = 15
+    ) -> Optional[GameTrendAnalysis]:
+        """Get trend analysis for a player's games.
+
+        Args:
+            username: Chess.com username
+            api_key: Anthropic API key
+            count: Number of games to analyze
+
+        Returns:
+            GameTrendAnalysis object or None if analysis failed
+        """
+        result = self.analyze_chesscom_games(username, api_key, count)
+        if result.get("success") and result.get("analysis"):
+            return GameTrendAnalysis(**result["analysis"])
+        return None
+
     def close(self):
         """Close the HTTP client."""
         self.client.close()
