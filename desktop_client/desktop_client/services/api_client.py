@@ -272,12 +272,80 @@ class ChessAPIClient:
             return GameTrendAnalysis(**result["analysis"])
         return None
 
+    # Coach Chat
+    def coach_chat(
+        self,
+        message: str,
+        fen: str,
+        move_history: List[str],
+        provider: str = "anthropic",
+        api_key: str = ""
+    ) -> str:
+        """Send a message to the chess coach.
+
+        Args:
+            message: User's message/question
+            fen: Current board position in FEN
+            move_history: List of moves in SAN notation
+            provider: LLM provider name
+            api_key: API key for the provider
+
+        Returns:
+            Coach's response text
+        """
+        data = {
+            "message": message,
+            "fen": fen,
+            "move_history": move_history,
+            "provider": provider,
+            "api_key": api_key
+        }
+        response = self.client.post(
+            f"{self.api_url}/coach/chat",
+            json=data,
+            timeout=60.0
+        )
+        result = self._handle_response(response)
+        return result.get("response", "")
+
+    # Game Analysis
+    def analyze_game(
+        self,
+        game_id: int,
+        pgn_data: str,
+        provider: str = "anthropic",
+        api_key: str = ""
+    ) -> Dict[str, Any]:
+        """Analyze a specific game for mistakes and blunders.
+
+        Args:
+            game_id: Game ID
+            pgn_data: Full PGN of the game
+            provider: LLM provider name
+            api_key: API key for the provider
+
+        Returns:
+            Dictionary with analysis results
+        """
+        data = {
+            "game_id": game_id,
+            "pgn_data": pgn_data,
+            "provider": provider,
+            "api_key": api_key
+        }
+        response = self.client.post(
+            f"{self.api_url}/analysis/game",
+            json=data,
+            timeout=120.0
+        )
+        return self._handle_response(response)
+
     def close(self):
         """Close the HTTP client."""
         self.client.close()
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()

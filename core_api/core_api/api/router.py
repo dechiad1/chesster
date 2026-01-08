@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from core_api.api.endpoints import auth, games, users, chess, analysis
+from core_api.api.endpoints import auth, games, users, chess, analysis, coach
 
 api_router = APIRouter()
 
@@ -12,3 +12,4 @@ api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(games.router, prefix="/games", tags=["games"])
 api_router.include_router(chess.router, prefix="/chess", tags=["chess"])
 api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
+api_router.include_router(coach.router, tags=["coach"])
