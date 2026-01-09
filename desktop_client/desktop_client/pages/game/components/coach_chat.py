@@ -1,7 +1,7 @@
 """Coach chat widget for interacting with the LLM coach."""
 
 import logging
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit,
@@ -11,6 +11,8 @@ from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSlot
 from PyQt6.QtGui import QFont, QTextCursor
 
 from desktop_client.services.api_client import ChessAPIClient, APIError
+from desktop_client.pages.game.models import ChessLine
+from desktop_client.pages.game.components.lines_message import LinesSuggestionMessage
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 class CoachChatWorker(QThread):
     """Worker thread for coach chat API calls."""
 
-    response_received = pyqtSignal(str)
+    response_received = pyqtSignal(dict)  # Changed from str to dict
     error_occurred = pyqtSignal(str)
 
     def __init__(
@@ -109,6 +111,8 @@ class ChatMessage(QFrame):
 
 class CoachChatWidget(QWidget):
     """Chat widget for interacting with the chess coach."""
+
+    line_exploration_requested = pyqtSignal(object)  # Emits ChessLine to explore
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -309,6 +313,20 @@ class CoachChatWidget(QWidget):
         self._chat_layout.insertWidget(self._chat_layout.count() - 1, message_widget)
         self._scroll_to_bottom()
 
+    def _add_lines_message(self, lines: List[ChessLine], intro_text: str):
+        """Add a lines suggestion message to the chat.
+
+        Args:
+            lines: List of suggested chess lines
+            intro_text: Introduction text for the lines
+        """
+        self._messages.append({"role": "coach", "type": "lines", "lines": lines})
+        message_widget = LinesSuggestionMessage(lines, intro_text)
+        message_widget.line_selected.connect(self.line_exploration_requested.emit)
+        # Insert before the stretch
+        self._chat_layout.insertWidget(self._chat_layout.count() - 1, message_widget)
+        self._scroll_to_bottom()
+
     def _scroll_to_bottom(self):
         """Scroll chat to the bottom."""
         scrollbar = self._chat_scroll.verticalScrollBar()
@@ -321,10 +339,35 @@ class CoachChatWidget(QWidget):
         self._status_label.setText("Thinking..." if loading else "Ready")
 
     @pyqtSlot(str)
-    def _on_response(self, response: str):
-        """Handle coach response."""
+    @pyqtSlot(dict)
+    def _on_response(self, response: dict):
+        """Handle coach response - can be text or lines.
+
+        Args:
+            response: Dict with response_type, content, and optional lines
+        """
         self._set_loading(False)
-        self._add_coach_message(response)
+
+        response_type = response.get("response_type", "text")
+
+        if response_type == "lines":
+            # Add lines suggestion message
+            lines_data = response.get("lines", [])
+            if lines_data:
+                lines = [ChessLine(**line) for line in lines_data]
+                content = response.get("content", "Here are some typical continuations:")
+                self._add_lines_message(lines, content)
+            else:
+                # Fallback to text if no lines
+                content = response.get("content", "")
+                self._add_coach_message(content)
+        else:
+            # Regular text message
+            content = response.get("content", "")
+            # Backward compatibility: try "response" field if "content" is empty
+            if not content:
+                content = response.get("response", "")
+            self._add_coach_message(content)
 
     @pyqtSlot(str)
     def _on_error(self, error: str):

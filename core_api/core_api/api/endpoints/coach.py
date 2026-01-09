@@ -1,7 +1,7 @@
 """Coach chat API endpoints."""
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -24,9 +24,29 @@ class ChatRequest(BaseModel):
     api_key: str
 
 
+class ChessLine(BaseModel):
+    """Represents a suggested chess variation/line."""
+    description: str  # e.g., "Main attacking continuation"
+    moves: List[str]  # UCI format: ["e2e4", "e7e5", "g1f3"]
+    moves_san: List[str]  # SAN format for display: ["e4", "e5", "Nf3"]
+    evaluation: Optional[float] = None  # Centipawns after the line
+
+
 class ChatResponse(BaseModel):
-    """Chat response model."""
-    response: str
+    """Chat response model - can contain text or suggested lines."""
+    response_type: Literal["text", "lines"] = "text"
+    content: str  # Text content or intro for lines
+    lines: Optional[List[ChessLine]] = None  # Suggested variations (if response_type == "lines")
+
+    # For backward compatibility
+    response: Optional[str] = None  # Deprecated, use content instead
+
+    def __init__(self, **data):
+        """Initialize with backward compatibility."""
+        # If old 'response' field is used, copy to 'content'
+        if 'response' in data and 'content' not in data:
+            data['content'] = data['response']
+        super().__init__(**data)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -74,12 +94,23 @@ async def coach_chat(request: ChatRequest):
     coach = CoachService(llm_provider, chess_engine)
 
     try:
-        response = coach.chat(
+        response_dict = coach.chat(
             message=request.message,
             fen=request.fen,
             move_history=request.move_history
         )
-        return ChatResponse(response=response)
+
+        # Convert lines dicts to ChessLine models if present
+        lines = None
+        if response_dict.get("lines"):
+            lines = [ChessLine(**line) for line in response_dict["lines"]]
+
+        return ChatResponse(
+            response_type=response_dict["response_type"],
+            content=response_dict["content"],
+            lines=lines,
+            response=response_dict["content"]  # For backward compatibility
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

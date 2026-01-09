@@ -177,6 +177,62 @@ class StockfishAdapter(ChessEnginePort):
         result = engine.play(board, chess.engine.Limit(depth=depth or self._default_depth))
         return result.move.uci() if result.move else ""
 
+    def get_multiple_lines(self, fen: str, num_lines: int = 3, depth: int = 20) -> list[PositionAnalysis]:
+        """Get multiple principal variations for a position.
+
+        Args:
+            fen: Position in FEN notation
+            num_lines: Number of variations to get (default 3)
+            depth: Search depth
+
+        Returns:
+            List of PositionAnalysis objects, one for each variation
+        """
+        logger.info(f"Getting {num_lines} lines for position")
+        try:
+            engine = self._get_engine()
+            board = chess.Board(fen)
+
+            # Analyze with MultiPV - python-chess manages MultiPV automatically via the multipv parameter
+            logger.info(f"Starting engine analysis with MultiPV={num_lines}...")
+            infos = engine.analyse(board, chess.engine.Limit(depth=depth or self._default_depth), multipv=num_lines)
+            logger.info(f"Analysis complete, received {len(infos) if isinstance(infos, list) else 1} results")
+        except Exception as e:
+            logger.error(f"Error during engine analysis: {e}", exc_info=True)
+            return []
+
+        results = []
+        for info in infos:
+            score = info.get("score", chess.engine.PovScore(chess.engine.Cp(0), chess.WHITE))
+            pov_score = score.white()
+
+            # Handle mate scores
+            is_mate = pov_score.is_mate()
+            mate_in = pov_score.mate() if is_mate else None
+
+            # Convert to centipawns
+            if is_mate:
+                evaluation = 10000 if mate_in > 0 else -10000
+            else:
+                evaluation = pov_score.score() or 0
+
+            # Get PV for this variation
+            pv = info.get("pv", [])
+            best_move = pv[0].uci() if pv else ""
+            pv_uci = [move.uci() for move in pv]
+
+            results.append(PositionAnalysis(
+                fen=fen,
+                evaluation=evaluation,
+                best_move=best_move,
+                depth=info.get("depth", depth),
+                pv=pv_uci,
+                is_mate=is_mate,
+                mate_in=mate_in
+            ))
+
+        return results
+
     def is_available(self) -> bool:
         """Check if Stockfish is available."""
         if not self._path:

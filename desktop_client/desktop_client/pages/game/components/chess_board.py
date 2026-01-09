@@ -3,6 +3,7 @@
 import logging
 from typing import Optional
 
+import chess
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont
@@ -79,8 +80,9 @@ class ChessBoardWidget(QWidget):
             legal_moves = self.game_service.get_legal_moves()
 
             for move in legal_moves:
-                if move.startswith(from_square):
-                    to_square = move[2:4]
+                move_uci = move.uci()
+                if move_uci.startswith(from_square):
+                    to_square = move_uci[2:4]
                     to_file = ord(to_square[0]) - 97
                     to_rank = int(to_square[1]) - 1
 
@@ -171,7 +173,7 @@ class ChessBoardWidget(QWidget):
 
             # Check for pawn promotion
             piece_info = self.game_service.get_piece_at_square(from_square)
-            if piece_info and piece_info['piece_type'] == 'pawn':
+            if piece_info and piece_info['type'] == chess.PAWN:
                 if (piece_info['color'] == 'white' and rank == 7) or \
                    (piece_info['color'] == 'black' and rank == 0):
                     move_uci += 'q'  # Auto-promote to queen
@@ -264,7 +266,7 @@ class ChessBoardWidget(QWidget):
 
     def get_fen(self) -> str:
         """Get the current FEN position."""
-        return self.game_service.get_fen()
+        return self.game_service.get_board_fen()
 
     def get_pgn(self) -> str:
         """Get the current game as PGN."""

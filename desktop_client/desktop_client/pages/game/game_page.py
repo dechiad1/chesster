@@ -12,7 +12,10 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from desktop_client.pages.game.components.chess_board import ChessBoardWidget
 from desktop_client.pages.game.components.coach_chat import CoachChatWidget
 from desktop_client.pages.game.components.game_controls import GameControlsWidget
+from desktop_client.pages.game.components.exploration_controls import ExplorationControlsWidget
 from desktop_client.pages.game.game_state import GameStateManager
+from desktop_client.pages.game.exploration_state import ExplorationStateManager
+from desktop_client.pages.game.models import ChessLine
 from desktop_client.services.api_client import ChessAPIClient, APIError
 from desktop_client.shared.services.config_service import ConfigService
 from shared.chess_service import PGNService
@@ -30,6 +33,7 @@ class GamePage(QWidget):
         self._api_client: Optional[ChessAPIClient] = None
         self._config_service: Optional[ConfigService] = None
         self._state_manager = GameStateManager()
+        self._exploration_manager = ExplorationStateManager()
 
         self._setup_ui()
         self._connect_signals()
@@ -52,6 +56,14 @@ class GamePage(QWidget):
 
         self._chess_board = ChessBoardWidget()
         board_layout.addWidget(self._chess_board, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Add exploration controls (initially hidden)
+        self._exploration_controls = ExplorationControlsWidget()
+        self._exploration_controls.setVisible(False)
+        board_layout.addWidget(
+            self._exploration_controls,
+            alignment=Qt.AlignmentFlag.AlignCenter
+        )
 
         splitter.addWidget(board_container)
 
@@ -85,6 +97,14 @@ class GamePage(QWidget):
         self._game_controls.undo_requested.connect(self._on_undo)
         self._game_controls.goto_move_requested.connect(self._on_goto_move)
         self._game_controls.opening_selected.connect(self._on_opening_selected)
+
+        # Coach chat line exploration
+        self._coach_chat.line_exploration_requested.connect(self._on_explore_line)
+
+        # Exploration controls
+        self._exploration_controls.next_move.connect(self._on_exploration_next)
+        self._exploration_controls.previous_move.connect(self._on_exploration_previous)
+        self._exploration_controls.exit_exploration.connect(self._on_exit_exploration)
 
     def set_api_client(self, client: ChessAPIClient):
         """Set the API client for game operations."""
@@ -298,3 +318,117 @@ class GamePage(QWidget):
     def refresh_config(self):
         """Refresh configuration (called when settings change)."""
         self._update_coach_config()
+
+    def _on_explore_line(self, line: ChessLine):
+        """Handle line exploration request.
+
+        Args:
+            line: Chess line to explore
+        """
+        # Save current game state
+        current_fen = self._chess_board.get_fen()
+        current_index = self._chess_board.game_service.current_move_index
+        move_history = self._chess_board.game_service.move_history
+
+        # Enter exploration mode
+        self._exploration_manager.enter_exploration(
+            line, current_fen, current_index, move_history
+        )
+
+        # Show exploration controls
+        self._exploration_controls.setVisible(True)
+        self._exploration_controls.update_position(0, len(line.moves))
+
+        # Disable game controls during exploration
+        self._game_controls.setEnabled(False)
+
+        logger.info(f"Entered exploration mode for line: {line.description}")
+
+    def _on_exploration_next(self):
+        """Navigate to next move in exploration."""
+        if not self._exploration_manager.state.is_active:
+            return
+
+        state = self._exploration_manager.state
+        line = state.current_line
+
+        # Get next position
+        pos = self._exploration_manager.next_position()
+
+        if pos > 0 and pos <= len(line.moves):
+            # Make the move on the board
+            move_uci = line.moves[pos - 1]
+            try:
+                self._chess_board.game_service.make_move_from_uci(move_uci)
+                self._chess_board.update()
+                self._update_ui_state()
+
+                # Update controls
+                self._exploration_controls.update_position(pos, len(line.moves))
+            except Exception as e:
+                logger.error(f"Failed to make exploration move {move_uci}: {e}")
+                QMessageBox.warning(
+                    self,
+                    "Exploration Error",
+                    f"Failed to make move: {e}"
+                )
+
+    def _on_exploration_previous(self):
+        """Navigate to previous move in exploration."""
+        if not self._exploration_manager.state.is_active:
+            return
+
+        state = self._exploration_manager.state
+        line = state.current_line
+
+        # Get previous position
+        pos = self._exploration_manager.previous_position()
+
+        # Undo last move
+        try:
+            self._chess_board.game_service.undo_move()
+            self._chess_board.update()
+            self._update_ui_state()
+
+            # Update controls
+            self._exploration_controls.update_position(pos, len(line.moves))
+        except Exception as e:
+            logger.error(f"Failed to undo exploration move: {e}")
+
+    def _on_exit_exploration(self):
+        """Exit exploration mode and restore game state."""
+        if not self._exploration_manager.state.is_active:
+            return
+
+        # Get saved state
+        saved_state = self._exploration_manager.state
+        saved_move_history = saved_state.saved_move_history.copy()
+        saved_index = saved_state.saved_move_index
+
+        # Exit exploration (clears exploration state)
+        self._exploration_manager.exit_exploration()
+
+        # Restore board to saved position
+        try:
+            # Restore the move history
+            self._chess_board.game_service.move_history = saved_move_history
+
+            # Reset board and replay moves to the saved position
+            self._chess_board.game_service.goto_move(saved_index)
+            self._chess_board.update()
+            self._update_ui_state()
+
+            # Hide exploration controls
+            self._exploration_controls.setVisible(False)
+
+            # Re-enable game controls
+            self._game_controls.setEnabled(True)
+
+            logger.info("Exited exploration mode")
+        except Exception as e:
+            logger.error(f"Failed to restore game state: {e}")
+            QMessageBox.critical(
+                self,
+                "Restoration Error",
+                f"Failed to restore game state: {e}"
+            )

@@ -1,7 +1,11 @@
 """Chess coach service for interactive coaching."""
 
+import json
 import logging
-from typing import List, Optional
+import re
+from typing import List, Optional, Dict, Any
+
+import chess
 
 from core_api.domain.ports.llm_port import LLMProviderPort, Message
 from core_api.domain.ports.chess_engine_port import ChessEnginePort
@@ -50,7 +54,7 @@ class CoachService:
         fen: str,
         move_history: List[str],
         conversation_history: Optional[List[dict]] = None
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Process a chat message from the user.
 
         Args:
@@ -60,8 +64,13 @@ class CoachService:
             conversation_history: Previous messages in the conversation
 
         Returns:
-            Coach's response text
+            Dict with response_type, content, and optional lines
         """
+        # Check if user is requesting line suggestions
+        if self._is_requesting_lines(message):
+            return self._generate_lines_response(fen, move_history, message)
+
+        # Regular text response
         # Build context about the current position
         context = self._build_context(fen, move_history)
 
@@ -101,7 +110,11 @@ class CoachService:
                 system_prompt=COACH_SYSTEM_PROMPT,
                 max_tokens=1024
             )
-            return response.content
+            return {
+                "response_type": "text",
+                "content": response.content,
+                "lines": None
+            }
         except Exception as e:
             logger.error(f"Coach chat failed: {e}")
             raise
@@ -172,3 +185,180 @@ Keep your response concise but educational."""
         except Exception as e:
             logger.error(f"Position advice failed: {e}")
             raise
+
+    def _is_requesting_lines(self, message: str) -> bool:
+        """Detect if user is asking for line/variation suggestions.
+
+        Args:
+            message: User's message
+
+        Returns:
+            True if requesting lines
+        """
+        keywords = [
+            "continuation", "variations", "lines", "what should i play",
+            "show me moves", "typical moves", "best continuations",
+            "what are my options", "possible moves", "suggest moves",
+            "show continuations", "what to play"
+        ]
+        message_lower = message.lower()
+        return any(keyword in message_lower for keyword in keywords)
+
+    def _generate_lines_response(
+        self,
+        fen: str,
+        move_history: List[str],
+        message: str
+    ) -> Dict[str, Any]:
+        """Generate response with suggested chess lines.
+
+        Args:
+            fen: Current FEN
+            move_history: Move history
+            message: User's message
+
+        Returns:
+            Dict with lines response
+        """
+        if not self._engine or not self._engine.is_available():
+            # No engine available, return text response
+            return {
+                "response_type": "text",
+                "content": "I'd love to suggest specific lines, but I don't have access to a chess engine at the moment. I can still discuss general ideas and plans if you'd like!",
+                "lines": None
+            }
+
+        try:
+            # Get lines from engine analysis
+            lines = self._generate_lines_from_engine(fen)
+
+            if not lines:
+                return {
+                    "response_type": "text",
+                    "content": "I couldn't generate specific variations for this position. Could you ask about a specific aspect of the position instead?",
+                    "lines": None
+                }
+
+            return {
+                "response_type": "lines",
+                "content": "Here are some typical continuations to consider:",
+                "lines": lines
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to generate lines: {e}")
+            return {
+                "response_type": "text",
+                "content": "I encountered an error while analyzing variations. Please try asking in a different way.",
+                "lines": None
+            }
+
+    def _generate_lines_from_engine(self, fen: str) -> List[Dict[str, Any]]:
+        """Generate suggested lines using chess engine.
+
+        Args:
+            fen: Current FEN position
+
+        Returns:
+            List of line dicts with description, moves, moves_san, evaluation
+        """
+        try:
+            board = chess.Board(fen)
+        except Exception as e:
+            logger.error(f"Invalid FEN: {e}")
+            return []
+
+        lines = []
+
+        try:
+            # Get top 3 variations using MultiPV
+            logger.info(f"Requesting 3 lines for position: {fen}")
+            analyses = self._engine.get_multiple_lines(fen, num_lines=3, depth=20)
+            logger.info(f"Received {len(analyses)} analyses from engine")
+
+            for i, analysis in enumerate(analyses):
+                if not analysis or not analysis.pv:
+                    continue
+
+                # Get the principal variation (first few moves)
+                pv_moves = analysis.pv[:5]  # Take first 5 moves of the line
+
+                if not pv_moves:
+                    continue
+
+                # Convert to SAN notation for display
+                temp_board = board.copy()
+                moves_uci = []
+                moves_san = []
+
+                for move_uci in pv_moves:
+                    try:
+                        move = chess.Move.from_uci(move_uci)
+                        if move in temp_board.legal_moves:
+                            moves_uci.append(move_uci)
+                            moves_san.append(temp_board.san(move))
+                            temp_board.push(move)
+                        else:
+                            break
+                    except Exception as e:
+                        logger.warning(f"Invalid move in PV: {move_uci}, {e}")
+                        break
+
+                if not moves_uci:
+                    continue
+
+                # Generate description based on line characteristics
+                description = self._generate_line_description(board, moves_san, i + 1)
+
+                lines.append({
+                    "description": description,
+                    "moves": moves_uci,
+                    "moves_san": moves_san,
+                    "evaluation": analysis.evaluation
+                })
+
+        except Exception as e:
+            logger.error(f"Failed to generate lines: {e}")
+            return []
+
+        return lines
+
+    def _generate_line_description(
+        self,
+        board: chess.Board,
+        moves_san: List[str],
+        line_number: int
+    ) -> str:
+        """Generate a description for a chess line.
+
+        Args:
+            board: Starting board position
+            moves_san: Moves in SAN notation
+            line_number: Which line this is (1, 2, or 3)
+
+        Returns:
+            Description string
+        """
+        descriptions = {
+            1: "Engine's top recommendation",
+            2: "Strong alternative line",
+            3: "Another solid continuation"
+        }
+
+        base_desc = descriptions.get(line_number, "Interesting variation")
+
+        # Add context based on first move characteristics
+        if moves_san:
+            first_move = moves_san[0]
+
+            # Check if it's a capture
+            if 'x' in first_move:
+                base_desc += " (captures material)"
+            # Check if it's a check
+            elif '+' in first_move or '#' in first_move:
+                base_desc += " (gives check)"
+            # Check for castling
+            elif first_move in ('O-O', 'O-O-O'):
+                base_desc += " (castling)"
+
+        return base_desc

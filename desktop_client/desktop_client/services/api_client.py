@@ -280,7 +280,7 @@ class ChessAPIClient:
         move_history: List[str],
         provider: str = "anthropic",
         api_key: str = ""
-    ) -> str:
+    ) -> dict:
         """Send a message to the chess coach.
 
         Args:
@@ -291,7 +291,7 @@ class ChessAPIClient:
             api_key: API key for the provider
 
         Returns:
-            Coach's response text
+            Dict with response_type, content, and optional lines
         """
         data = {
             "message": message,
@@ -306,7 +306,7 @@ class ChessAPIClient:
             timeout=60.0
         )
         result = self._handle_response(response)
-        return result.get("response", "")
+        return result  # Return full dict instead of just result.get("response")
 
     # Game Analysis
     def analyze_game(

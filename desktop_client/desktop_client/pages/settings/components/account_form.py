@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QPushButton, QLabel, QComboBox, QFrame, QMessageBox
 )
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QFont
 
 from desktop_client.services.api_client import ChessAPIClient, APIError, UserData
@@ -59,9 +59,6 @@ class AccountFormWidget(QWidget):
         form_layout.setContentsMargins(20, 20, 20, 20)
         form_layout.setSpacing(15)
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        # Import Qt for alignment
-        from PyQt6.QtCore import Qt
 
         # Username
         self._username_input = QLineEdit()
