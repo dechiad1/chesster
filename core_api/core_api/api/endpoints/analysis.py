@@ -1,6 +1,8 @@
 """API endpoints for chess.com integration and LLM analysis."""
 
+from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 import logging
 
 from core_api.schemas.analysis import (
@@ -20,6 +22,9 @@ from core_api.services.llm_analysis_service import (
     LLMAnalysisService,
     LLMAnalysisError
 )
+from core_api.adapters.llm.factory import create_llm_provider
+from core_api.adapters.chess_engine.stockfish_adapter import StockfishAdapter
+from core_api.services.move_analysis_service import MoveAnalysisService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -161,4 +166,102 @@ async def analyze_games(request: AnalyzeGamesRequest):
         return AnalyzeGamesResponse(
             success=False,
             error="An unexpected error occurred during analysis"
+        )
+
+
+class GameAnalysisRequest(BaseModel):
+    """Request model for single game analysis."""
+    game_id: int
+    pgn_data: str
+    provider: str = "anthropic"
+    api_key: str
+
+
+class GameAnalysisResponse(BaseModel):
+    """Response model for game analysis."""
+    success: bool = True
+    summary: Optional[str] = None
+    critical_moments: Optional[List[Dict[str, Any]]] = None
+    mistakes: Optional[List[Dict[str, Any]]] = None
+    blunders: Optional[List[Dict[str, Any]]] = None
+    recommendations: Optional[List[str]] = None
+    error: Optional[str] = None
+
+
+@router.post("/game", response_model=GameAnalysisResponse)
+async def analyze_single_game(request: GameAnalysisRequest):
+    """Analyze a single game for mistakes and blunders.
+
+    Uses the LLM to analyze the game PGN and identify:
+    - Critical moments and turning points
+    - Mistakes and blunders
+    - Recommendations for improvement
+
+    If Stockfish is available, it will be used to identify
+    objective mistakes before sending to the LLM.
+
+    Args:
+        request: Game analysis request with PGN and provider info
+
+    Returns:
+        Detailed game analysis
+    """
+    if not request.api_key:
+        return GameAnalysisResponse(
+            success=False,
+            error="API key is required"
+        )
+
+    if not request.pgn_data:
+        return GameAnalysisResponse(
+            success=False,
+            error="PGN data is required"
+        )
+
+    # Create LLM provider
+    llm_provider = create_llm_provider(
+        provider=request.provider,
+        api_key=request.api_key
+    )
+
+    if not llm_provider:
+        return GameAnalysisResponse(
+            success=False,
+            error=f"Invalid LLM provider: {request.provider}"
+        )
+
+    # Try to create chess engine (optional)
+    chess_engine = None
+    try:
+        engine = StockfishAdapter()
+        if engine.is_available():
+            chess_engine = engine
+    except Exception as e:
+        logger.warning(f"Stockfish not available: {e}")
+
+    # Create analysis service
+    analysis_service = MoveAnalysisService(llm_provider, chess_engine)
+
+    try:
+        result = analysis_service.analyze_game(request.pgn_data)
+
+        return GameAnalysisResponse(
+            success=True,
+            summary=result.get("summary"),
+            critical_moments=result.get("critical_moments", []),
+            mistakes=result.get("mistakes", []),
+            blunders=result.get("blunders", []),
+            recommendations=result.get("recommendations", [])
+        )
+
+    except ValueError as e:
+        return GameAnalysisResponse(
+            success=False,
+            error=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Game analysis error: {e}")
+        return GameAnalysisResponse(
+            success=False,
+            error=f"Analysis failed: {str(e)}"
         )

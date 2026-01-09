@@ -12,16 +12,17 @@ tasks:
       - task --list
 
   # Setup tasks
-  setup:
+  install:
     desc: Set up development environment for all artifacts
     deps:
-      - setup:core_api
-      - setup:desktop_client
+      - install:core_api
+      - install:desktop_client
 
-  setup:core_api:
+  install:core_api:
     desc: Set up development environment for core_api
     dir: "{{.CORE_API_DIR}}"
     cmds:
+      - poetry lock
       - poetry install
     sources:
       - pyproject.toml
@@ -29,10 +30,11 @@ tasks:
     generates:
       - .venv/**/*
 
-  setup:desktop_client:
+  install:desktop_client:
     desc: Set up development environment for desktop_client
     dir: "{{.DESKTOP_CLIENT_DIR}}"
     cmds:
+      - poetry lock
       - poetry install
     sources:
       - pyproject.toml
