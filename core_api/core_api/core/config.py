@@ -22,8 +22,10 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = [
         "http://localhost:3000",  # React dev server
+        "http://localhost:5173",  # Vite dev server
         "http://localhost:8080",  # Alternative dev server
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
         "http://127.0.0.1:8080",
     ]
     
