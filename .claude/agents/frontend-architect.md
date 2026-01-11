@@ -151,7 +151,7 @@ Define clear, semantic breakpoints:
 ## API Integration Patterns
 
 ### Data Fetching
-- Consider using React Query or SWR for server state management
+- Consider using React Query for server state management
 - Implement proper error boundaries
 - Cache responses appropriately
 - Handle race conditions and stale data

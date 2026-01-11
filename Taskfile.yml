@@ -3,6 +3,7 @@ version: "3"
 vars:
   CORE_API_DIR: "{{.ROOT_DIR}}/core_api"
   DESKTOP_CLIENT_DIR: "{{.ROOT_DIR}}/desktop_client"
+  WEB_DIR: "{{.ROOT_DIR}}/web"
   CLAUDE_DIR: "{{.ROOT_DIR}}/.claude"
 
 tasks:
@@ -17,6 +18,7 @@ tasks:
     deps:
       - install:core_api
       - install:desktop_client
+      - install:web
 
   install:core_api:
     desc: Set up development environment for core_api
@@ -42,6 +44,17 @@ tasks:
     generates:
       - .venv/**/*
 
+  install:web:
+    desc: Set up development environment for web frontend
+    dir: "{{.WEB_DIR}}"
+    cmds:
+      - npm install
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/**/*
+
   # Run tasks
   run:core_api:
     desc: Run the core API server (http://localhost:8000)
@@ -54,6 +67,12 @@ tasks:
     dir: "{{.DESKTOP_CLIENT_DIR}}"
     cmds:
       - poetry run python run_app.py
+
+  run:web:
+    desc: Run the web frontend (http://localhost:5173)
+    dir: "{{.WEB_DIR}}"
+    cmds:
+      - npm run dev
 
   run:desktop:
     desc: Run both core API and desktop client together
@@ -95,6 +114,61 @@ tasks:
           fi
 
           cd "{{.DESKTOP_CLIENT_DIR}}" && poetry run python run_app.py
+        '
+
+  run:web_dev:
+    desc: Run both core API and web frontend together
+    vars:
+      API_URL: "http://localhost:8000/health"
+      TIMEOUT: 30
+    cmds:
+      - |
+        bash -c '
+          cleanup() {
+            echo "Shutting down..."
+            kill $API_PID $WEB_PID 2>/dev/null
+            exit 0
+          }
+          trap cleanup INT TERM EXIT
+
+          cd "{{.CORE_API_DIR}}" && poetry run python run.py &
+          API_PID=$!
+
+          echo "Waiting for API to be ready..."
+          elapsed=0
+          while [ $elapsed -lt {{.TIMEOUT}} ]; do
+            if ! kill -0 $API_PID 2>/dev/null; then
+              echo "API process failed to start"
+              exit 1
+            fi
+            if curl -sf "{{.API_URL}}" > /dev/null 2>&1; then
+              echo "API is ready"
+              break
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+          done
+
+          if [ $elapsed -ge {{.TIMEOUT}} ]; then
+            echo "API failed to respond within {{.TIMEOUT}} seconds"
+            kill $API_PID 2>/dev/null
+            exit 1
+          fi
+
+          echo "Starting web frontend..."
+          cd "{{.WEB_DIR}}" && npm run dev &
+          WEB_PID=$!
+
+          echo ""
+          echo "=========================================="
+          echo "Both services are running:"
+          echo "  API:  http://localhost:8000"
+          echo "  Web:  http://localhost:5173"
+          echo "=========================================="
+          echo "Press Ctrl+C to stop both services"
+          echo ""
+
+          wait
         '
 
   # Claude configuration sync
